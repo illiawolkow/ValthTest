@@ -214,8 +214,3 @@ async def test_get_popular_names_unauthenticated(client: AsyncClient):
     assert response.status_code == 401, response.text
     data = response.json()
     assert data["detail"] == "Not authenticated"
-
-# Placeholder for /popular-names/ tests (to be added next)
-# @pytest.mark.asyncio
-# async def test_get_popular_names_success(authenticated_client: AsyncClient, mocker, db_session: Session):
-#     pass

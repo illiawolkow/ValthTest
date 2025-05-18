@@ -10,7 +10,6 @@ from app.auth.dependencies import get_current_active_user
 
 router = APIRouter(
     tags=["names_and_countries"],
-    # dependencies=[Depends(get_current_active_user)], # Uncomment to protect all routes
 )
 
 @router.get("/names/", response_model=schemas.NamePredictionResponse)
