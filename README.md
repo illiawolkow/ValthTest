@@ -46,7 +46,7 @@ ValhTest/
 
 1.  **Clone the Repository (if applicable)**
     ```bash
-    # git clone <[your-repository-url](https://github.com/illiawolkow/ValthTest)>
+    # git clone https://github.com/illiawolkow/ValthTest
     # cd ValthTest
     ```
 
