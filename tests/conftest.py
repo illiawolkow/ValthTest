@@ -3,110 +3,122 @@ import asyncio
 import pytest
 from typing import AsyncGenerator, Generator
 
-# Set environment variables for testing BEFORE other imports that might load settings
-# This ensures that when Pydantic's Settings model is initialized, it finds these values.
-# These are typically needed for app initialization even if parts are overridden later (like DB URL).
-os.environ["DATABASE_URL"] = "sqlite:///./test_override.db" # Dummy, will be overridden by engine
+# Use an async SQLite URL for testing
+os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///./test_pytest.db" # Use a distinct file for test DB
 os.environ["JWT_SECRET_KEY"] = "test_secret_key_for_pytest_12345678901234567890"
 os.environ["ALGORITHM"] = "HS256"
 os.environ["ACCESS_TOKEN_EXPIRE_MINUTES"] = "30"
 
 from fastapi import FastAPI
 from httpx import AsyncClient, ASGITransport
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker, Session
+# For async testing setup
+from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+from sqlalchemy.orm import sessionmaker
 
-from app.main import app # Your FastAPI application instance
-from app.database import Base, get_db # Your SQLAlchemy Base and get_db dependency
+# Important: Import app and its components AFTER environment variables are set
+from app.main import app
+from app.database import Base, get_db # get_db is now async
 from app.core.config import settings
 
-# Use an in-memory SQLite database for testing
-TEST_SQLALCHEMY_DATABASE_URL = "sqlite:///./test.db" # In-memory: "sqlite:///:memory:"
-# Using a file-based SQLite for easier inspection during test development, 
-# change to ":memory:" for potentially faster tests if inspection is not needed.
-
-engine = create_engine(
-    TEST_SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False}
+# Create an async engine for testing
+# The DATABASE_URL from os.environ will be used by app.database.engine
+# This test_engine is for direct manipulation in conftest if needed, or for overriding get_db
+test_engine = create_async_engine(
+    settings.DATABASE_URL, # This should now be the async sqlite URL
+    echo=False # Can be True for debugging test SQL
 )
-TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+# Async sessionmaker for tests
+TestingSessionLocal = sessionmaker(
+    bind=test_engine,
+    class_=AsyncSession,
+    expire_on_commit=False,
+    autocommit=False,
+    autoflush=False,
+)
 
 @pytest.fixture(scope="session")
 def event_loop() -> Generator[asyncio.AbstractEventLoop, None, None]:
-    """Create an instance of the default event loop for each test session."""
     loop = asyncio.get_event_loop_policy().new_event_loop()
     yield loop
     loop.close()
 
 @pytest.fixture(scope="session", autouse=True)
-def setup_test_database() -> Generator[None, None, None]:
-    """Create test database tables before tests run, and drop them after."""
-    Base.metadata.create_all(bind=engine) # Create tables
+async def setup_test_database() -> AsyncGenerator[None, None]: # Changed to async
+    async with test_engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
     yield
-    Base.metadata.drop_all(bind=engine) # Drop tables
+    async with test_engine.begin() as conn:
+        await conn.run_sync(Base.metadata.drop_all)
+    await test_engine.dispose() # Dispose of the test engine
 
-def override_get_db() -> Generator[Session, None, None]:
-    """Dependency override for get_db to use the test database."""
-    try:
-        db = TestingSessionLocal()
-        yield db
-    finally:
-        db.close()
+async def override_get_db() -> AsyncGenerator[AsyncSession, None]: # Changed to async
+    async with TestingSessionLocal() as session:
+        yield session
+        # No explicit close needed due to async context manager
 
-# Apply the override for get_db for all tests
 app.dependency_overrides[get_db] = override_get_db
 
 @pytest.fixture(scope="function")
 async def client() -> AsyncGenerator[AsyncClient, None]:
-    """Async test client for making requests to the FastAPI app."""
-    transport = ASGITransport(app=app) 
-    async with AsyncClient(transport=transport, base_url=f"http://127.0.0.1:8000{settings.API_V1_STR}") as ac:
-        yield ac
+    # ASGITransport needs the app itself
+    async with ASGITransport(app=app) as transport: # Corrected ASGITransport usage
+        async with AsyncClient(transport=transport, base_url="http://testserver") as ac: # base_url can be testserver
+            yield ac
 
 @pytest.fixture(scope="function")
-def db_session() -> Generator[Session, None, None]:
-    """Yield a database session for direct data manipulation in tests."""
-    # This provides a direct session if needed, different from the one injected into routes.
-    # Ensure it's used carefully and consistently with the test database setup.
-    db = TestingSessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
+async def db_session() -> AsyncGenerator[AsyncSession, None]: # Changed to async
+    async with TestingSessionLocal() as session:
+        yield session
 
-# Fixture to provide a default user and their password for tests
-# This can be expanded or parameterized as needed.
 @pytest.fixture(scope="function")
-async def test_user_data(client: AsyncClient, db_session: Session) -> dict:
-    from app import crud, schemas
+async def test_user_data(db_session: AsyncSession) -> dict: # Changed to take async db_session
+    # Assumes crud.get_user_by_username and crud.create_user are now async
+    # and accept AsyncSession. This will require changes in app.crud
+    from app import crud, schemas # crud functions need to be async
     from app.auth.jwt import get_password_hash
 
     user_in = schemas.UserCreate(
-        username="testuser123", 
-        email="testuser123@example.com", 
+        username="testuser123",
+        email="testuser123@example.com",
         password="testpassword123"
     )
-    # Clean up existing user if any, before creating
-    existing_user = crud.get_user_by_username(db_session, username=user_in.username)
+    
+    # Make sure CRUD functions are async and awaited
+    existing_user = await crud.get_user_by_username(db_session, username=user_in.username)
     if existing_user:
-        db_session.delete(existing_user)
-        db_session.commit()
+        await db_session.delete(existing_user)
+        await db_session.commit()
 
-    # user_in is already schemas.UserCreate
-    hashed_password = get_password_hash(user_in.password)
-    crud.create_user(db_session, user_create=user_in, hashed_password_in=hashed_password)
+    hashed_password = get_password_hash(user_in.password) # This can remain sync
+    # Ensure create_user is async and handles commit
+    await crud.create_user(db_session, user_create=user_in, hashed_password_in=hashed_password)
     
     return {"username": user_in.username, "password": user_in.password, "email": user_in.email, "full_name": "Test User"}
 
 @pytest.fixture(scope="function")
 async def authenticated_client(client: AsyncClient, test_user_data: dict) -> AsyncClient:
-    """Returns an AsyncClient that is authenticated with the test_user_data."""
     login_data = {
         "username": test_user_data["username"],
         "password": test_user_data["password"],
     }
-    # The token endpoint expects form data, not JSON
-    response = await client.post(f"/auth/token", data=login_data) 
-    assert response.status_code == 200
+    # The app's API_V1_STR is used if client has base_url ending before that
+    # If client base_url is "http://testserver", path should be settings.API_V1_STR + "/auth/token"
+    # Or, if client already includes API_V1_STR in its base_url, then just "/auth/token"
+    # Current client fixture base_url="http://testserver", so we need the prefix
+    # However, previous base_url for client in conftest was "http://127.0.0.1:8000{settings.API_V1_STR}"
+    # Let's assume client base_url is now just "http://testserver" for simplicity with ASGITransport
+    
+    # Corrected URL for ASGITransport if base_url is "http://testserver"
+    # The path must be absolute from the app's root.
+    token_url = f"{settings.API_V1_STR}/auth/token"
+
+    response = await client.post(token_url, data=login_data)
+    
+    if response.status_code != 200:
+        # Provide more info on auth failure during tests
+        pytest.fail(f"Authentication failed: {response.status_code} {response.text}")
+        
     token = response.json()["access_token"]
     client.headers = {"Authorization": f"Bearer {token}"}
     return client 

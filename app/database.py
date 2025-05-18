@@ -1,21 +1,30 @@
-from sqlalchemy import create_engine
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+from sqlalchemy.orm import sessionmaker, declarative_base
 
 from app.core.config import settings
 
-engine = create_engine(settings.DATABASE_URL)
+# Use create_async_engine for an asynchronous engine
+engine = create_async_engine(settings.DATABASE_URL, echo=False) # echo=True for debugging SQL
 
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+# Configure SessionLocal for AsyncSession
+SessionLocal = sessionmaker(
+    bind=engine,
+    class_=AsyncSession, # Use AsyncSession
+    expire_on_commit=False, # Common practice for async sessions
+    autocommit=False, # Explicit commit/rollback is better
+    autoflush=False,  # Explicit flush is better
+)
 
 Base = declarative_base()
 
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
+async def get_db() -> AsyncSession: # Changed to async def
+    async with SessionLocal() as session:
+        try:
+            yield session
+        finally:
+            await session.close() # Ensure session is closed
 
-def create_tables():
-    Base.metadata.create_all(bind=engine) 
+async def create_tables(): # Changed to async def
+    async with engine.begin() as conn:
+        # For creating tables with an async engine
+        await conn.run_sync(Base.metadata.create_all) 

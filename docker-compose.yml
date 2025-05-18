@@ -1,0 +1,44 @@
+version: '3.8'
+
+services:
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file:
+      - .env.example
+    ports:
+      - "8000:8000"
+    volumes:
+      - .:/app  # Mounts the current directory to /app in the container for live-reloading
+    depends_on:
+      db:
+        condition: service_healthy
+    entrypoint: ["/app/wait-for-postgres.sh", "db:5432", "--"]
+    command: ["sh", "-c", "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"]
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "${POSTGRES_USER:-valth_user}", "-d", "${POSTGRES_DB:-valth_db}", "-h", "db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  db:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-valth_user}       # Use from .env or default
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-valth_password} # Use from .env or default
+      POSTGRES_DB: ${POSTGRES_DB:-valth_db}             # Use from .env or default
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5433:5432" # Optional: Map host port 5433 to container port 5432 if you need external access to DB
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-valth_user} -d ${POSTGRES_DB:-valth_db}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+volumes:
+  postgres_data: 

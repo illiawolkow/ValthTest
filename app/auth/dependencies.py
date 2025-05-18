@@ -1,10 +1,10 @@
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 from jose import JWTError
 
 from app.auth import jwt as jwt_utils
-from app import crud, schemas, models # Added models import
+from app import crud, schemas, models
 from app.database import get_db
 
 # This is the URL where the client will send the username and password to get a token
@@ -12,7 +12,7 @@ from app.database import get_db
 # The prefix /api/v1 is assumed to be handled by the main app router
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/token")
 
-async def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)) -> models.User:
+async def get_current_user(token: str = Depends(oauth2_scheme), db: AsyncSession = Depends(get_db)) -> models.User:
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Could not validate credentials",
@@ -23,7 +23,7 @@ async def get_current_user(token: str = Depends(oauth2_scheme), db: Session = De
     if not token_data or not token_data.username:
         raise credentials_exception
     
-    user = crud.get_user_by_username(db, username=token_data.username)
+    user = await crud.get_user_by_username(db, username=token_data.username)
     if user is None:
         raise credentials_exception
     return user

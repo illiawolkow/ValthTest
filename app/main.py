@@ -15,17 +15,13 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup: Create database tables (useful for initial setup without migrations)
-    # For production with Alembic, you might comment this out or make it conditional.
     logger.info("Creating database tables if they don't exist...")
     try:
-        create_tables() # This uses Base.metadata.create_all(bind=engine)
+        await create_tables()
         logger.info("Database tables checked/created.")
     except Exception as e:
         logger.error(f"Error creating database tables: {e}")
-        # Depending on the error, you might want to prevent app startup
     yield
-    # Shutdown: (e.g., close database connections if not handled by session yielding)
     logger.info("Application shutdown.")
 
 app = FastAPI(
